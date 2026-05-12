@@ -108,7 +108,10 @@ export async function POST(req: NextRequest) {
       try {
         busy = await listFreeBusy(client, supabase, startISO, endISO);
       } catch (calErr) {
-        console.error("[vapi] check_calendar_availability: Google Calendar freebusy failed:", calErr);
+        console.error(
+          "[vapi] check_calendar_availability: Google Calendar freebusy failed:",
+          calErr
+        );
       }
     }
 
@@ -143,9 +146,7 @@ export async function POST(req: NextRequest) {
       : " (calendar not connected — availability is approximate)";
 
     // Include ISO alongside human label so the agent passes exact ISO to book_appointment
-    const slotList = suggested
-      .map((s) => `${s.label} (iso: ${s.iso})`)
-      .join(", ");
+    const slotList = suggested.map((s) => `${s.label} (iso: ${s.iso})`).join(", ");
 
     const out = vapiOk(
       toolCallId,
