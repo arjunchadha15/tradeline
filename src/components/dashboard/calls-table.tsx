@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -12,6 +14,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatPretty } from "@/lib/phone";
+import { updateCallRecord } from "@/lib/actions/calls";
 
 type Call = {
   id: string;
@@ -26,6 +29,7 @@ type Call = {
   audio_url: string | null;
   structured_data: unknown;
   summary: string | null;
+  problem_summary: string | null;
 };
 
 function relativeTime(iso: string | null) {
@@ -79,6 +83,117 @@ function TranscriptView({ transcript }: { transcript: string | null }) {
   );
 }
 
+function CallDetailsEditor({
+  call,
+  onSaved,
+}: {
+  call: Call;
+  onSaved: (updated: Partial<Call>) => void;
+}) {
+  const [name, setName] = useState(call.caller_name ?? "");
+  const [phone, setPhone] = useState(call.caller_phone ?? "");
+  const [address, setAddress] = useState(call.caller_address ?? "");
+  const [urgency, setUrgency] = useState(call.urgency ?? "standard");
+  const [outcome, setOutcome] = useState(call.outcome ?? "");
+  const [summary, setSummary] = useState(call.problem_summary ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    const fields = {
+      caller_name: name || undefined,
+      caller_phone: phone || undefined,
+      caller_address: address || undefined,
+      urgency: urgency || undefined,
+      outcome: outcome || undefined,
+      problem_summary: summary || undefined,
+    };
+    await updateCallRecord(call.id, fields);
+    onSaved(fields);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-muted-foreground">
+        Correct anything the AI got wrong. Changes save to the record immediately.
+      </p>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2 space-y-1">
+          <Label className="text-xs">Caller name</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
+        </div>
+
+        <div className="col-span-2 space-y-1">
+          <Label className="text-xs">Phone number</Label>
+          <Input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+1 (908) 555-1234"
+          />
+        </div>
+
+        <div className="col-span-2 space-y-1">
+          <Label className="text-xs">Address</Label>
+          <Input
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="Street, City, ZIP"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs">Urgency</Label>
+          <select
+            value={urgency}
+            onChange={(e) => setUrgency(e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+          >
+            <option value="standard">Standard</option>
+            <option value="same_day">Same day</option>
+            <option value="emergency">Emergency</option>
+          </select>
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs">Outcome</Label>
+          <select
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+          >
+            <option value="">—</option>
+            <option value="booked">Booked</option>
+            <option value="escalated">Escalated</option>
+            <option value="message">Message taken</option>
+            <option value="abandoned">Abandoned</option>
+          </select>
+        </div>
+
+        <div className="col-span-2 space-y-1">
+          <Label className="text-xs">Problem summary</Label>
+          <Input
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+            placeholder="Brief description of the issue"
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 pt-1">
+        <Button size="sm" onClick={handleSave} disabled={saving}>
+          {saving ? "Saving…" : "Save changes"}
+        </Button>
+        {saved && <span className="text-xs text-green-600">Saved ✓</span>}
+      </div>
+    </div>
+  );
+}
+
 const FILTERS = ["all", "today", "week", "emergencies", "abandoned"] as const;
 type Filter = (typeof FILTERS)[number];
 
@@ -107,10 +222,18 @@ function filterCalls(calls: Call[], filter: Filter, query: string) {
   return result;
 }
 
-export function CallsTable({ calls }: { calls: Call[] }) {
+export function CallsTable({ calls: initialCalls }: { calls: Call[] }) {
+  const [calls, setCalls] = useState<Call[]>(initialCalls);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Call | null>(null);
+
+  function handleCallUpdated(updated: Partial<Call>) {
+    if (!selected) return;
+    const merged = { ...selected, ...updated };
+    setSelected(merged);
+    setCalls((prev) => prev.map((c) => (c.id === merged.id ? merged : c)));
+  }
 
   const filtered = filterCalls(calls, filter, query);
 
@@ -225,12 +348,21 @@ export function CallsTable({ calls }: { calls: Call[] }) {
                 </SheetDescription>
               </SheetHeader>
 
-              <Tabs defaultValue="transcript">
+              <Tabs defaultValue="details">
                 <TabsList className="mb-4">
+                  <TabsTrigger value="details">Details</TabsTrigger>
                   <TabsTrigger value="transcript">Transcript</TabsTrigger>
                   <TabsTrigger value="audio">Audio</TabsTrigger>
                   <TabsTrigger value="raw">Raw</TabsTrigger>
                 </TabsList>
+
+                <TabsContent value="details">
+                  <CallDetailsEditor
+                    key={selected.id}
+                    call={selected}
+                    onSaved={handleCallUpdated}
+                  />
+                </TabsContent>
 
                 <TabsContent value="transcript">
                   <TranscriptView transcript={selected.transcript} />

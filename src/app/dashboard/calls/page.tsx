@@ -29,7 +29,7 @@ export default async function CallsPage() {
   const { data: calls } = await supabase
     .from("calls")
     .select(
-      "id,created_at,caller_name,caller_phone,caller_address,urgency,outcome,duration_sec,transcript,audio_url,structured_data,summary"
+      "id,created_at,caller_name,caller_phone,caller_address,urgency,outcome,duration_sec,transcript,audio_url,structured_data,summary,problem_summary"
     )
     .eq("client_id", client.id)
     .order("created_at", { ascending: false })
