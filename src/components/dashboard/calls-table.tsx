@@ -14,7 +14,13 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatPretty } from "@/lib/phone";
-import { updateCallRecord } from "@/lib/actions/calls";
+import { updateCallRecord, updateBookingValues } from "@/lib/actions/calls";
+
+type Booking = {
+  id: string;
+  estimated_value_usd: number | null;
+  actual_value_usd: number | null;
+};
 
 type Call = {
   id: string;
@@ -30,6 +36,7 @@ type Call = {
   structured_data: unknown;
   summary: string | null;
   problem_summary: string | null;
+  bookings?: Booking[] | null;
 };
 
 function relativeTime(iso: string | null) {
@@ -90,18 +97,27 @@ function CallDetailsEditor({
   call: Call;
   onSaved: (updated: Partial<Call>) => void;
 }) {
+  const booking = call.bookings?.[0] ?? null;
+
   const [name, setName] = useState(call.caller_name ?? "");
   const [phone, setPhone] = useState(call.caller_phone ?? "");
   const [address, setAddress] = useState(call.caller_address ?? "");
   const [urgency, setUrgency] = useState(call.urgency ?? "standard");
   const [outcome, setOutcome] = useState(call.outcome ?? "");
   const [summary, setSummary] = useState(call.problem_summary ?? "");
+  const [estimated, setEstimated] = useState(
+    booking?.estimated_value_usd != null ? String(booking.estimated_value_usd) : ""
+  );
+  const [actual, setActual] = useState(
+    booking?.actual_value_usd != null ? String(booking.actual_value_usd) : ""
+  );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   async function handleSave() {
     setSaving(true);
-    const fields = {
+
+    const callFields = {
       caller_name: name || undefined,
       caller_phone: phone || undefined,
       caller_address: address || undefined,
@@ -109,8 +125,19 @@ function CallDetailsEditor({
       outcome: outcome || undefined,
       problem_summary: summary || undefined,
     };
-    await updateCallRecord(call.id, fields);
-    onSaved(fields);
+    await updateCallRecord(call.id, callFields);
+
+    if (booking) {
+      const estNum = estimated !== "" ? parseFloat(estimated) : null;
+      const actNum = actual !== "" ? parseFloat(actual) : null;
+      await updateBookingValues(
+        booking.id,
+        isNaN(estNum!) ? null : estNum,
+        isNaN(actNum!) ? null : actNum
+      );
+    }
+
+    onSaved(callFields);
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -182,6 +209,33 @@ function CallDetailsEditor({
             placeholder="Brief description of the issue"
           />
         </div>
+
+        {booking ? (
+          <>
+            <div className="space-y-1">
+              <Label className="text-xs">Estimated value ($)</Label>
+              <Input
+                type="number"
+                value={estimated}
+                onChange={(e) => setEstimated(e.target.value)}
+                placeholder="350"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Actual value ($)</Label>
+              <Input
+                type="number"
+                value={actual}
+                onChange={(e) => setActual(e.target.value)}
+                placeholder="420"
+              />
+            </div>
+          </>
+        ) : (
+          <p className="col-span-2 text-xs text-muted-foreground">
+            No booking linked to this call — price fields appear once a booking is created.
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-3 pt-1">

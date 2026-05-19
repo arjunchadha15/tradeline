@@ -25,3 +25,17 @@ export async function updateCallRecord(
   await supabase.from("calls").update(update).eq("id", callId);
   revalidatePath("/dashboard/calls");
 }
+
+export async function updateBookingValues(
+  bookingId: string,
+  estimated: number | null,
+  actual: number | null
+) {
+  const supabase = await createClient();
+  await supabase
+    .from("bookings")
+    .update({ estimated_value_usd: estimated, actual_value_usd: actual })
+    .eq("id", bookingId);
+  revalidatePath("/dashboard/calls");
+  revalidatePath("/dashboard/revenue");
+}
