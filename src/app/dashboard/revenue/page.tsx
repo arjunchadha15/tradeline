@@ -1,9 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Phone, Calendar, AlertTriangle, DollarSign } from "lucide-react";
 import { RevenueChart } from "@/components/dashboard/revenue-chart";
+import { RepairTypeChart, LocationChart } from "@/components/dashboard/breakdown-charts";
 import { ActualValueEdit } from "@/components/dashboard/actual-value-edit";
 
 function isoWeek(date: Date): string {
@@ -24,6 +24,21 @@ function weekLabel(isoWeekStr: string): string {
   const weekStart = new Date(jan4);
   weekStart.setDate(jan4.getDate() - dayOfWeek + (wk - 1) * 7);
   return weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function repairLabel(summary: string | null): string {
+  if (!summary) return "Other";
+  const clean = summary.trim();
+  // Truncate to first 4 words, max 32 chars
+  const words = clean.split(/\s+/).slice(0, 4).join(" ");
+  return words.length > 32 ? words.slice(0, 29) + "…" : words;
+}
+
+function cityFromAddress(address: string | null): string {
+  if (!address) return "Unknown";
+  const parts = address.split(",");
+  if (parts.length < 2) return address.trim().slice(0, 20) || "Unknown";
+  return parts[1].trim().slice(0, 20);
 }
 
 export default async function RevenuePage() {
@@ -55,8 +70,9 @@ export default async function RevenuePage() {
     { count: totalCalls },
     { count: totalBookings },
     { count: totalEmergencies },
-    { data: allBookings },
-    { data: completedBookings },
+    { data: recentBookings },
+    { data: allCompletedBookings },
+    { data: recentCompleted },
   ] = await Promise.all([
     supabase.from("calls").select("*", { count: "exact", head: true }).eq("client_id", client.id),
     supabase
@@ -69,38 +85,63 @@ export default async function RevenuePage() {
       .eq("client_id", client.id),
     supabase
       .from("bookings")
-      .select("id,scheduled_at,estimated_value_usd,actual_value_usd")
+      .select("id,scheduled_at,actual_value_usd")
       .eq("client_id", client.id)
       .gte("scheduled_at", ninetyDaysAgo.toISOString()),
     supabase
       .from("bookings")
-      .select("id,scheduled_at,customer_name,actual_value_usd,estimated_value_usd,status")
+      .select("id,problem_summary,customer_address,actual_value_usd")
+      .eq("client_id", client.id)
+      .not("actual_value_usd", "is", null),
+    supabase
+      .from("bookings")
+      .select("id,scheduled_at,customer_name,actual_value_usd,status")
       .eq("client_id", client.id)
       .eq("status", "completed")
       .order("scheduled_at", { ascending: false })
       .limit(10),
   ]);
 
-  const avgTicket = client.avg_ticket_usd ?? 0;
-  const closeRate = client.close_rate ?? 0;
   const tc = totalCalls ?? 0;
   const tb = totalBookings ?? 0;
   const bookingRate = tc === 0 ? 0 : Math.round((tb / tc) * 100);
-  const estRevSaved = Math.round(tc * avgTicket * closeRate);
+  const totalRevenue = (allCompletedBookings ?? []).reduce(
+    (s, b) => s + (b.actual_value_usd ?? 0),
+    0
+  );
 
-  // Build weekly chart data
-  const weekMap = new Map<string, { estimated: number; actual: number }>();
-  for (const b of allBookings ?? []) {
+  // Weekly revenue chart (actual only)
+  const weekMap = new Map<string, number>();
+  for (const b of recentBookings ?? []) {
+    if (!b.actual_value_usd) continue;
     const wk = isoWeek(new Date(b.scheduled_at));
-    const existing = weekMap.get(wk) ?? { estimated: 0, actual: 0 };
-    existing.estimated += b.estimated_value_usd ?? 0;
-    existing.actual += b.actual_value_usd ?? b.estimated_value_usd ?? 0;
-    weekMap.set(wk, existing);
+    weekMap.set(wk, (weekMap.get(wk) ?? 0) + b.actual_value_usd);
   }
-
   const chartData = Array.from(weekMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([wk, vals]) => ({ week: weekLabel(wk), ...vals }));
+    .map(([wk, revenue]) => ({ week: weekLabel(wk), revenue }));
+
+  // Revenue by repair type
+  const repairMap = new Map<string, number>();
+  for (const b of allCompletedBookings ?? []) {
+    const label = repairLabel(b.problem_summary);
+    repairMap.set(label, (repairMap.get(label) ?? 0) + (b.actual_value_usd ?? 0));
+  }
+  const repairData = Array.from(repairMap.entries())
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 8)
+    .map(([label, revenue]) => ({ label, revenue }));
+
+  // Revenue by location
+  const locationMap = new Map<string, number>();
+  for (const b of allCompletedBookings ?? []) {
+    const city = cityFromAddress(b.customer_address);
+    locationMap.set(city, (locationMap.get(city) ?? 0) + (b.actual_value_usd ?? 0));
+  }
+  const locationData = Array.from(locationMap.entries())
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 8)
+    .map(([label, revenue]) => ({ label, revenue }));
 
   return (
     <div className="space-y-6">
@@ -148,32 +189,53 @@ export default async function RevenuePage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Est. revenue saved
+              Total revenue
             </CardTitle>
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold">${estRevSaved.toLocaleString()}</p>
-            <p className="mt-1 text-xs text-muted-foreground">all time</p>
+            <p className="text-3xl font-bold">${totalRevenue.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-muted-foreground">recorded jobs</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Chart */}
+      {/* Weekly revenue chart */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Weekly bookings revenue (last 90 days)</CardTitle>
+          <CardTitle className="text-base">Weekly revenue (last 90 days)</CardTitle>
         </CardHeader>
         <CardContent>
           <RevenueChart data={chartData} />
         </CardContent>
       </Card>
 
-      {/* Completed bookings table */}
-      {completedBookings && completedBookings.length > 0 && (
+      {/* Breakdowns */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Recent completed bookings</CardTitle>
+            <CardTitle className="text-base">Revenue by repair type</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <RepairTypeChart data={repairData} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Revenue by location</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <LocationChart data={locationData} />
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Recent completed jobs */}
+      {recentCompleted && recentCompleted.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Recent completed jobs</CardTitle>
           </CardHeader>
           <CardContent>
             <table className="w-full text-sm">
@@ -181,12 +243,11 @@ export default async function RevenuePage() {
                 <tr className="border-b">
                   <th className="pb-2 text-left font-medium text-muted-foreground">Date</th>
                   <th className="pb-2 text-left font-medium text-muted-foreground">Customer</th>
-                  <th className="pb-2 text-left font-medium text-muted-foreground">Estimated</th>
-                  <th className="pb-2 text-left font-medium text-muted-foreground">Actual</th>
+                  <th className="pb-2 text-left font-medium text-muted-foreground">Revenue</th>
                 </tr>
               </thead>
               <tbody>
-                {completedBookings.map((b) => (
+                {recentCompleted.map((b) => (
                   <tr key={b.id} className="border-b last:border-0">
                     <td className="py-2 text-muted-foreground">
                       {new Date(b.scheduled_at).toLocaleDateString("en-US", {
@@ -195,11 +256,6 @@ export default async function RevenuePage() {
                       })}
                     </td>
                     <td className="py-2">{b.customer_name}</td>
-                    <td className="py-2 text-muted-foreground">
-                      {b.estimated_value_usd != null
-                        ? `$${b.estimated_value_usd.toLocaleString()}`
-                        : "—"}
-                    </td>
                     <td className="py-2">
                       <ActualValueEdit bookingId={b.id} value={b.actual_value_usd} />
                     </td>

@@ -4,13 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Phone, Calendar, AlertTriangle, DollarSign, ArrowUpRight } from "lucide-react";
 import { formatPretty } from "@/lib/phone";
+import { MiniRevenueChart } from "@/components/dashboard/revenue-chart";
 import Link from "next/link";
 
 function greeting(name: string) {
   const h = new Date().getHours();
   const time = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-  const first = name.split(" ")[0];
-  return `${time}, ${first}`;
+  return `${time}, ${name.split(" ")[0]}`;
 }
 
 function relativeTime(iso: string | null) {
@@ -29,6 +29,26 @@ function urgencyVariant(
   if (urgency === "emergency") return "destructive";
   if (urgency === "same_day") return "default";
   return "secondary";
+}
+
+function isoWeek(date: Date): string {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
+  const week1 = new Date(d.getFullYear(), 0, 4);
+  const weekNum =
+    1 +
+    Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
+  return `${d.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+}
+
+function weekLabel(isoWeekStr: string): string {
+  const [year, wk] = isoWeekStr.split("-W").map(Number);
+  const jan4 = new Date(year, 0, 4);
+  const dayOfWeek = (jan4.getDay() + 6) % 7;
+  const weekStart = new Date(jan4);
+  weekStart.setDate(jan4.getDate() - dayOfWeek + (wk - 1) * 7);
+  return weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 export default async function DashboardPage() {
@@ -64,20 +84,18 @@ export default async function DashboardPage() {
   const weekStart = new Date(now);
   weekStart.setDate(now.getDate() - now.getDay());
   weekStart.setHours(0, 0, 0, 0);
-
   const lastWeekStart = new Date(weekStart);
   lastWeekStart.setDate(weekStart.getDate() - 7);
-
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const eightWeeksAgo = new Date(Date.now() - 56 * 86400000);
 
   const [
     { count: callsThisWeek },
     { count: callsLastWeek },
-    { data: bookingsThisWeek },
+    { count: bookingCount },
     { count: emergenciesThisWeek },
-    { count: callsThisMonth },
     { data: recentCalls },
     { data: upcomingBookings },
+    { data: revenueBookings },
   ] = await Promise.all([
     supabase
       .from("calls")
@@ -92,7 +110,7 @@ export default async function DashboardPage() {
       .lt("created_at", weekStart.toISOString()),
     supabase
       .from("bookings")
-      .select("estimated_value_usd")
+      .select("*", { count: "exact", head: true })
       .eq("client_id", client.id)
       .gte("created_at", weekStart.toISOString()),
     supabase
@@ -100,11 +118,6 @@ export default async function DashboardPage() {
       .select("*", { count: "exact", head: true })
       .eq("client_id", client.id)
       .gte("created_at", weekStart.toISOString()),
-    supabase
-      .from("calls")
-      .select("*", { count: "exact", head: true })
-      .eq("client_id", client.id)
-      .gte("created_at", monthStart.toISOString()),
     supabase
       .from("calls")
       .select("id,created_at,caller_name,caller_phone,urgency,summary,outcome")
@@ -118,17 +131,31 @@ export default async function DashboardPage() {
       .gte("scheduled_at", now.toISOString())
       .order("scheduled_at", { ascending: true })
       .limit(5),
+    supabase
+      .from("bookings")
+      .select("scheduled_at,actual_value_usd")
+      .eq("client_id", client.id)
+      .not("actual_value_usd", "is", null)
+      .gte("scheduled_at", eightWeeksAgo.toISOString()),
   ]);
 
-  const bookingCount = bookingsThisWeek?.length ?? 0;
-  const bookingValue = bookingsThisWeek?.reduce((s, b) => s + (b.estimated_value_usd ?? 0), 0) ?? 0;
   const callsW = callsThisWeek ?? 0;
   const callsLW = callsLastWeek ?? 0;
   const weekPct = callsLW === 0 ? null : Math.round(((callsW - callsLW) / callsLW) * 100);
 
-  const avgTicket = client.avg_ticket_usd ?? 0;
-  const closeRate = client.close_rate ?? 0;
-  const estRevenueSaved = Math.round((callsThisMonth ?? 0) * avgTicket * closeRate);
+  // Mini revenue chart — weekly actual revenue last 8 weeks
+  const weekMap = new Map<string, number>();
+  for (const b of revenueBookings ?? []) {
+    const wk = isoWeek(new Date(b.scheduled_at));
+    weekMap.set(wk, (weekMap.get(wk) ?? 0) + (b.actual_value_usd ?? 0));
+  }
+  const miniChartData = Array.from(weekMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([wk, revenue]) => ({ week: weekLabel(wk), revenue }));
+
+  const totalRevenueThisMonth = (revenueBookings ?? [])
+    .filter((b) => new Date(b.scheduled_at) >= new Date(now.getFullYear(), now.getMonth(), 1))
+    .reduce((s, b) => s + (b.actual_value_usd ?? 0), 0);
 
   return (
     <div className="space-y-6">
@@ -161,10 +188,8 @@ export default async function DashboardPage() {
             <Calendar className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold">{bookingCount}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              ${bookingValue.toLocaleString()} estimated value
-            </p>
+            <p className="text-3xl font-bold">{bookingCount ?? 0}</p>
+            <p className="mt-1 text-xs text-muted-foreground">appointments scheduled</p>
           </CardContent>
         </Card>
 
@@ -182,16 +207,32 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Est. revenue saved
+              Revenue this month
             </CardTitle>
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold">${estRevenueSaved.toLocaleString()}</p>
-            <p className="mt-1 text-xs text-muted-foreground">this month</p>
+            <p className="text-3xl font-bold">${totalRevenueThisMonth.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-muted-foreground">recorded jobs</p>
           </CardContent>
         </Card>
       </div>
+
+      {/* Mini revenue chart */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-base">Revenue (last 8 weeks)</CardTitle>
+          <Link
+            href="/dashboard/revenue"
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            Full breakdown <ArrowUpRight className="h-3 w-3" />
+          </Link>
+        </CardHeader>
+        <CardContent>
+          <MiniRevenueChart data={miniChartData} />
+        </CardContent>
+      </Card>
 
       {/* Recent calls + upcoming bookings */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

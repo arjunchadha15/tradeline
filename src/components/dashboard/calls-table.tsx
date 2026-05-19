@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatPretty } from "@/lib/phone";
-import { updateCallRecord, updateBookingValues } from "@/lib/actions/calls";
+import { updateCallRecord, updateBookingActualValue } from "@/lib/actions/calls";
 
 type Booking = {
   id: string;
@@ -105,9 +105,6 @@ function CallDetailsEditor({
   const [urgency, setUrgency] = useState(call.urgency ?? "standard");
   const [outcome, setOutcome] = useState(call.outcome ?? "");
   const [summary, setSummary] = useState(call.problem_summary ?? "");
-  const [estimated, setEstimated] = useState(
-    booking?.estimated_value_usd != null ? String(booking.estimated_value_usd) : ""
-  );
   const [actual, setActual] = useState(
     booking?.actual_value_usd != null ? String(booking.actual_value_usd) : ""
   );
@@ -128,13 +125,8 @@ function CallDetailsEditor({
     await updateCallRecord(call.id, callFields);
 
     if (booking) {
-      const estNum = estimated !== "" ? parseFloat(estimated) : null;
       const actNum = actual !== "" ? parseFloat(actual) : null;
-      await updateBookingValues(
-        booking.id,
-        isNaN(estNum!) ? null : estNum,
-        isNaN(actNum!) ? null : actNum
-      );
+      await updateBookingActualValue(booking.id, isNaN(actNum!) ? null : actNum);
     }
 
     onSaved(callFields);
@@ -211,29 +203,18 @@ function CallDetailsEditor({
         </div>
 
         {booking ? (
-          <>
-            <div className="space-y-1">
-              <Label className="text-xs">Estimated value ($)</Label>
-              <Input
-                type="number"
-                value={estimated}
-                onChange={(e) => setEstimated(e.target.value)}
-                placeholder="350"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Actual value ($)</Label>
-              <Input
-                type="number"
-                value={actual}
-                onChange={(e) => setActual(e.target.value)}
-                placeholder="420"
-              />
-            </div>
-          </>
+          <div className="col-span-2 space-y-1">
+            <Label className="text-xs">Job value ($)</Label>
+            <Input
+              type="number"
+              value={actual}
+              onChange={(e) => setActual(e.target.value)}
+              placeholder="What did the job end up costing?"
+            />
+          </div>
         ) : (
           <p className="col-span-2 text-xs text-muted-foreground">
-            No booking linked to this call — price fields appear once a booking is created.
+            No booking linked — job value appears once an appointment is created.
           </p>
         )}
       </div>
