@@ -3,6 +3,7 @@ import { verifyVapiRequest } from "@/lib/vapi/auth";
 import { vapiOk, parseArgs } from "@/lib/vapi/respond";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createEvent } from "@/lib/google/calendar";
+import { normalizeE164 } from "@/lib/phone";
 
 export async function POST(req: NextRequest) {
   if (!verifyVapiRequest(req)) {
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
         scheduled_at: startDate.toISOString(),
         duration_min: 60,
         customer_name: customerName,
-        customer_phone: customerPhone,
+        customer_phone: normalizeE164(customerPhone) || customerPhone,
         customer_address: customerAddress ?? null,
         problem_summary: problemSummary ?? null,
         status: "scheduled",
@@ -127,8 +128,10 @@ export async function POST(req: NextRequest) {
             client_id: client.id,
             scheduled_at: new Date(slotISO).toISOString(),
             duration_min: 60,
-            customer_name: customerName ?? null,
-            customer_phone: customerPhone ?? null,
+            customer_name: customerName ?? "Unknown",
+            customer_phone: customerPhone
+              ? normalizeE164(customerPhone) || customerPhone
+              : "unknown",
             customer_address: customerAddress ?? null,
             problem_summary: problemSummary ?? null,
             status: "scheduled",
