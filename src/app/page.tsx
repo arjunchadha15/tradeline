@@ -7,8 +7,8 @@ export default function LandingPage() {
       <div className="mx-auto max-w-2xl text-center">
         <h1 className="text-5xl font-bold tracking-tight text-foreground sm:text-6xl">TradeLine</h1>
         <p className="mt-6 text-lg leading-8 text-muted-foreground">
-          AI-powered tradeline management. Streamline your credit operations with intelligent
-          automation and real-time insights.
+          The AI phone agent for plumbers, electricians, and HVAC pros. Answers every call, books
+          jobs on your calendar, and texts you the moment there&apos;s an emergency.
         </p>
         <div className="mt-10 flex items-center justify-center gap-4">
           <Button asChild size="lg">
